@@ -40,6 +40,7 @@ type Monitor struct {
 
 // NewMonitor creates a new monitoring instance
 func NewMonitor(interval time.Duration) *Monitor {
+	// #nosec G118 -- cancel is retained in Monitor and invoked in Stop()
 	ctx, cancel := context.WithCancel(context.Background())
 
 	return &Monitor{
