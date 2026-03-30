@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strings"
 
 	"github.com/docker/go-plugins-helpers/secrets"
 	log "github.com/sirupsen/logrus"
@@ -37,8 +39,19 @@ func (d *DopplerProvider) Initialize(config map[string]string) error {
 	if d.config.Token == "" {
 		return fmt.Errorf("DOPPLER_TOKEN is required")
 	}
+	if d.config.Project == "" {
+		return fmt.Errorf("DOPPLER_PROJECT is required")
+	}
+	if d.config.Config == "" {
+		return fmt.Errorf("DOPPLER_CONFIG is required")
+	}
 
 	d.client = &http.Client{}
+
+	if err := d.validateAccess(context.Background()); err != nil {
+		return fmt.Errorf("failed to validate Doppler credentials/config: %w", err)
+	}
+
 	log.Printf("Successfully initialized Doppler provider")
 	return nil
 }
@@ -133,4 +146,43 @@ func (d *DopplerProvider) GetProviderName() string {
 // Close cleans up resources
 func (d *DopplerProvider) Close() error {
 	return nil
+}
+
+func (d *DopplerProvider) validateAccess(ctx context.Context) error {
+	baseURL := "https://api.doppler.com/v3/configs/config"
+	query := url.Values{}
+	query.Set("project", d.config.Project)
+	query.Set("config", d.config.Config)
+
+	httpReq, err := http.NewRequestWithContext(ctx, "GET", baseURL+"?"+query.Encode(), nil)
+	if err != nil {
+		return fmt.Errorf("failed to create validation request: %w", err)
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+d.config.Token)
+
+	resp, err := d.client.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("failed to call Doppler validation API: %w", err)
+	}
+	defer func() {
+		if closeErr := resp.Body.Close(); closeErr != nil {
+			log.WithError(closeErr).Warn("failed to close doppler validation response body")
+		}
+	}()
+
+	if resp.StatusCode == http.StatusOK {
+		return nil
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	if readErr != nil {
+		return fmt.Errorf("doppler validation API returned status %d", resp.StatusCode)
+	}
+
+	msg := strings.TrimSpace(string(body))
+	if msg == "" {
+		return fmt.Errorf("doppler validation API returned status %d", resp.StatusCode)
+	}
+
+	return fmt.Errorf("doppler validation API returned status %d: %s", resp.StatusCode, msg)
 }
